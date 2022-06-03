@@ -8,10 +8,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/ericaro/frontmatter"
-	"github.com/gorhill/cronexpr"
+	"github.com/adrg/frontmatter"
+	"github.com/robfig/cron/v3"
 	"github.com/xanzy/go-gitlab"
 )
 
@@ -26,7 +27,6 @@ var (
 
 type metadata struct {
 	Title        string   `yaml:"title"`
-	Description  string   `fm:"content" yaml:"-"`
 	Confidential bool     `yaml:"confidential"`
 	Assignees    []string `yaml:"assignees,flow"`
 	Labels       []string `yaml:"labels,flow"`
@@ -42,6 +42,7 @@ func processIssueFile(lastTime time.Time) filepath.WalkFunc {
 		}
 
 		if filepath.Ext(path) != ".md" {
+			log.Println(path, "does not end in .md, skipping file")
 			return nil
 		}
 
@@ -50,44 +51,39 @@ func processIssueFile(lastTime time.Time) filepath.WalkFunc {
 			return err
 		}
 
-		data, err := parseMetadata(contents)
+		var mdata metadata
+		data, err := frontmatter.Parse(
+			strings.NewReader(string(contents)),
+			&mdata,
+		)
+
 		if err != nil {
 			return err
 		}
 
-		cronExpression, err := cronexpr.Parse(data.Crontab)
+		cronExpr, err := cron.ParseStandard(mdata.Crontab)
 		if err != nil {
 			return err
 		}
 
-		data.NextTime = cronExpression.Next(lastTime)
+		mdata.NextTime = cronExpr.Next(lastTime)
 
-		if data.NextTime.Before(time.Now()) {
-			log.Println(path, "was due", data.NextTime.Format(time.RFC3339), "- creating new issue")
+		if mdata.NextTime.Before(time.Now()) {
+			log.Println(path, "was due", mdata.NextTime.Format(time.RFC3339), "- creating new issue")
 
-			err := createIssue(data)
+			err := createIssue(&mdata, data)
 			if err != nil {
 				return err
 			}
 		} else {
-			log.Println(path, "is due", data.NextTime.Format(time.RFC3339))
+			log.Println(path, "is due", mdata.NextTime.Format(time.RFC3339))
 		}
 
 		return nil
 	}
 }
 
-func parseMetadata(contents []byte) (*metadata, error) {
-	data := new(metadata)
-	err := frontmatter.Unmarshal(contents, data)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
-}
-
-func createIssue(data *metadata) error {
+func createIssue(mdata *metadata, data []byte) error {
 	transCfg := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -106,19 +102,19 @@ func createIssue(data *metadata) error {
 	}
 
 	options := &gitlab.CreateIssueOptions{
-		Title:        gitlab.String(data.Title),
-		Description:  gitlab.String(data.Description),
-		Confidential: &data.Confidential,
-		CreatedAt:    &data.NextTime,
+		Title:        gitlab.String(mdata.Title),
+		Description:  gitlab.String(string(data)),
+		Confidential: &mdata.Confidential,
+		CreatedAt:    &mdata.NextTime,
 	}
 
-	if data.DueIn != "" {
-		duration, err := time.ParseDuration(data.DueIn)
+	if mdata.DueIn != "" {
+		duration, err := time.ParseDuration(mdata.DueIn)
 		if err != nil {
 			return err
 		}
 
-		dueDate := gitlab.ISOTime(data.NextTime.Add(duration))
+		dueDate := gitlab.ISOTime(mdata.NextTime.Add(duration))
 
 		options.DueDate = &dueDate
 	}

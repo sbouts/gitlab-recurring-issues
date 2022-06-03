@@ -23,7 +23,7 @@ Create a pipeline in the `.gitlab-ci.yml` file:
 
 ```yaml
 recurring issues:
-  image: ph1ll/gitlab-recurring-issues
+  image: sbouts/gitlab-recurring-issues
   script: gitlab-recurring-issues
   only: 
     - schedules
