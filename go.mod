@@ -1,4 +1,4 @@
-module github.com/ph1ll/gitlab-recurring-issues
+module github.com/sbouts/gitlab-recurring-issues
 
 go 1.14
 
