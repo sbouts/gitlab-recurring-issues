@@ -1,9 +1,9 @@
 FROM golang:alpine AS builder
 
-ADD ./ /go/src/github.com/ph1ll/gitlab-recurring-issues
+ADD ./ /go/src/github.com/sbouts/gitlab-recurring-issues
 
 RUN set -ex && \
-  cd /go/src/github.com/ph1ll/gitlab-recurring-issues && \       
+  cd /go/src/github.com/sbouts/gitlab-recurring-issues && \       
   CGO_ENABLED=0 go build \
         -tags netgo \
         -v -a \
