@@ -95,6 +95,26 @@ duein: 24h
 				DueIn: "24h",
 			},
 		},
+		{
+			name: "Parses epic",
+			args: args{contents: ([]byte)(`---
+epic: testepic
+---
+`)},
+			want: &metadata{
+				Epic: "testepic",
+			},
+		},
+		{
+			name: "Parses projectid",
+			args: args{contents: ([]byte)(`---
+projectid: 101
+---
+`)},
+			want: &metadata{
+				ProjectId: 101,
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

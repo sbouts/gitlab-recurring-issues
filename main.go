@@ -1,13 +1,12 @@
 package main
 
 import (
-	"crypto/tls"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/ericaro/frontmatter"
@@ -16,12 +15,13 @@ import (
 )
 
 var (
-	ciAPIV4URL         string = ""
-	gitlabAPIToken     string = ""
-	ciProjectID        string = ""
-	ciProjectDir       string = ""
-	ciJobName          string = ""
-	issuesRelativePath string = ".gitlab/recurring_issue_templates/"
+	ciAPIV4URL             string = ""
+	gitlabAPIToken         string = ""
+	ciProjectID            string = ""
+	ciProjectDir           string = ""
+	ciJobName              string = ""
+	ciProjectRootNamespace string = ""
+	issuesRelativePath     string = ".gitlab/recurring_issue_templates/"
 )
 
 type metadata struct {
@@ -32,6 +32,8 @@ type metadata struct {
 	Labels       []string `yaml:"labels,flow"`
 	DueIn        string   `yaml:"duein"`
 	Crontab      string   `yaml:"crontab"`
+	Epic         string   `yaml:"epic"`
+	ProjectId    int      `yaml:"projectid"`
 	NextTime     time.Time
 }
 
@@ -42,6 +44,7 @@ func processIssueFile(lastTime time.Time) filepath.WalkFunc {
 		}
 
 		if filepath.Ext(path) != ".md" {
+			log.Println(path, "does not end in .md, skipping file")
 			return nil
 		}
 
@@ -88,19 +91,7 @@ func parseMetadata(contents []byte) (*metadata, error) {
 }
 
 func createIssue(data *metadata) error {
-	transCfg := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	httpClient := &http.Client{
-		Transport: transCfg,
-	}
-
-	git, err := gitlab.NewClient(gitlabAPIToken, gitlab.WithBaseURL(ciAPIV4URL), gitlab.WithHTTPClient(httpClient))
-	if err != nil {
-		return err
-	}
-
-	project, _, err := git.Projects.GetProject(ciProjectID, nil)
+	git, err := createGitlabClient()
 	if err != nil {
 		return err
 	}
@@ -123,23 +114,90 @@ func createIssue(data *metadata) error {
 		options.DueDate = &dueDate
 	}
 
-	_, _, err = git.Issues.CreateIssue(project.ID, options)
+	issueProjectId, err := strconv.Atoi(ciProjectID)
 	if err != nil {
 		return err
+	}
+
+	if data.ProjectId != 0 {
+		issueProjectId = data.ProjectId
+	}
+
+	newIssue, _, err := git.Issues.CreateIssue(issueProjectId, options)
+	if err != nil {
+		return err
+	}
+
+	if data.Epic != "" {
+		groupId, err := getGroupIdFromNamespace()
+		if err != nil {
+			return err
+		}
+
+		epicId, err := getEpicId(groupId, data.Epic)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = git.EpicIssues.AssignEpicIssue(groupId, epicId, newIssue.ID)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func getLastRunTime() (time.Time, error) {
-	transCfg := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	httpClient := &http.Client{
-		Transport: transCfg,
+func getGroupIdFromNamespace() (int, error) {
+	git, err := createGitlabClient()
+	if err != nil {
+		return 0, err
 	}
 
-	git, err := gitlab.NewClient(gitlabAPIToken, gitlab.WithBaseURL(ciAPIV4URL), gitlab.WithHTTPClient(httpClient))
+	options := &gitlab.ListGroupsOptions{
+		Search:       &ciProjectRootNamespace,
+		TopLevelOnly: gitlab.Bool(true),
+		OrderBy:      gitlab.String("id"),
+	}
+
+	groups, _, err := git.Groups.ListGroups(options)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(groups) != 1 {
+		log.Fatal("Expected one group for namespace" + ciProjectRootNamespace + "but found multiple")
+	}
+
+	return groups[0].ID, nil
+}
+
+func getEpicId(groupId int, epicName string) (int, error) {
+	git, err := createGitlabClient()
+	if err != nil {
+		return 0, err
+	}
+
+	options := &gitlab.ListGroupEpicsOptions{
+		Search:                  &epicName,
+		IncludeDescendantGroups: gitlab.Bool(false),
+	}
+
+	epics, _, err := git.Epics.ListGroupEpics(groupId, options)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(epics) != 1 {
+		log.Fatal("Expected one epic for epicName" + epicName + "but found multiple")
+	}
+
+	return epics[0].ID, nil
+}
+
+func getLastRunTime() (time.Time, error) {
+	git, err := createGitlabClient()
+
 	if err != nil {
 		return time.Unix(0, 0), err
 	}
@@ -183,18 +241,23 @@ func main() {
 	}
 
 	ciProjectID = os.Getenv("CI_PROJECT_ID")
-	if gitlabAPIToken == "" {
+	if ciProjectID == "" {
 		log.Fatal("Environment variable 'CI_PROJECT_ID' not found. This tool must be ran as part of a GitLab pipeline.")
 	}
 
 	ciProjectDir = os.Getenv("CI_PROJECT_DIR")
-	if gitlabAPIToken == "" {
+	if ciProjectDir == "" {
 		log.Fatal("Environment variable 'CI_PROJECT_DIR' not found. This tool must be ran as part of a GitLab pipeline.")
 	}
 
 	ciJobName = os.Getenv("CI_JOB_NAME")
-	if gitlabAPIToken == "" {
+	if ciJobName == "" {
 		log.Fatal("Environment variable 'CI_JOB_NAME' not found. This tool must be ran as part of a GitLab pipeline.")
+	}
+
+	ciProjectRootNamespace = os.Getenv("CI_PROJECT_ROOT_NAMESPACE")
+	if ciProjectRootNamespace == "" {
+		log.Fatal("Environment variable 'CI_PROJECT_ROOT_NAMESPACE' not found. This tool must be ran as part of a GitLab pipeline.")
 	}
 
 	issuesRelativePath = path.Join(ciProjectDir, issuesRelativePath)
