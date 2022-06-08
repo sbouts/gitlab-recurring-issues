@@ -166,7 +166,7 @@ func getGroupIdFromNamespace() (int, error) {
 	}
 
 	if len(groups) != 1 {
-		log.Fatal("Expected one group for namespace" + ciProjectRootNamespace + "but found multiple")
+		log.Fatal("Expected one group for namespace", ciProjectRootNamespace, "but found multiple")
 	}
 
 	return groups[0].ID, nil
@@ -189,7 +189,7 @@ func getEpicId(groupId int, epicName string) (int, error) {
 	}
 
 	if len(epics) != 1 {
-		log.Fatal("Expected one epic for epicName" + epicName + "but found multiple")
+		log.Fatal("Expected one epic for epicName", epicName, "but found multiple")
 	}
 
 	return epics[0].ID, nil
